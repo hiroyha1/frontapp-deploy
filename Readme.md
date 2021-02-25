@@ -11,11 +11,25 @@
 
 ## Environment の作成
 
+展開先の AKS をリソースとしてもつ Environment を作成します。
+
 1. Pipelines の Environments を開きます。
 2. "Create environment" (既に Environment が存在する場合は "New environment") をクリックします。
 3. Name 欄に production と入力し、"Kubernetes" にチェックを入れて "Next" をクリックします。
 4. "New environment" と表示される画面でデプロイ先の AKS リソースを選択します。リソースが見つからない場合やエラーが発生する場合は、対象の AKS リソースに対して現在のユーザーがクラスター管理者ロールの役割を持っているか確認してください。
 5. Namespace 欄では "New" にチェックを入れ、任意の名前空間名を入力します。ここで入力した名前空間が AKS 内に作成されます。
+
+## 解説 - Environment について
+
+Environment は後述する Deployment ジョブで使用するもので、Kubernetes クラスタまたは仮想マシンのリソースの集まりです (リソースを一つも持たない Environment の作成できます)。
+
+Environment を使用することで、次のような機能が実現できます。
+
+- 展開履歴の確認
+- 実行されたジョブや展開に紐づいたコミット、ワークアイテムの確認
+- リソースの状態の確認
+- その Environment にアクセス可能なユーザーやパイプラインの制限
+- ジョブの実行前に承認処理を追加
 
 ## Variable group の作成
 
@@ -84,6 +98,14 @@ stages:
 3. "Save and run" をクリックすると YAML ファイルが保存され、パイプラインが実行されます。
 4. ビルドに成功すると、生成されたマニフェストがパイプラインのアーティファクトに登録されます。ファイルは "1 published" と書かれたところをクリックすると確認することができます。
 ![3.png](resources/3.png)
+
+## 解説 - Kustomize について
+
+Kustomize を使うと、ベースとなる YAML ファイルとその差分の YAML ファイルを結合した YAML ファイルを生成することができます。
+
+本ラボでは `manifests/base` の下に共通の Deployment と Service の YAML を配置し、開発環境向けの差分を `manifests/overlays/development` の下に、プロダクション環境向けの差分を `manifests/overlays/developoment` の下に配置しています。
+
+Kustomize によって、開発、プロダクション向けのマージされた Kubernetes マニフェストがそれぞれ生成されます。
 
 ## 解説 - ラボで作成したパイプラインについて
 
@@ -165,6 +187,13 @@ Pipeline artifacts は Azure Artifacts とは別もので、パイプライン�
               manifests: '$(Pipeline.Workspace)/manifests/*.yaml'
 ```
 5. "Save" をクリックするとビルドが開始されます。("Run" をクリックしなくても、master ブランチへ azure-pipelines.yml がコミットされたことをトリガーにビルドが開始されます)
+6. パイプラインの実行に成功すると、AKS 内の Environment で指定した名前空間に Deployment と Service が作成されます。
+7. Pipelines の Environments を開きます。
+8. "production" をクリックします。
+9. 名前空間名をクリックします。
+10. "Workloads" タブに展開された Deployment、"Services" タブに展開された Service が表示され、正常に動作していることを確認します。
+
+![4.png](resources/4.png)
 
 ## 解説 - ラボで作成したパイプラインについて
 
@@ -173,11 +202,26 @@ Pipeline artifacts は Azure Artifacts とは別もので、パイプライン�
     dependsOn: bake
     pool:
       vmImage: ubuntu-latest
+```
+
+[Deployment](https://docs.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops) は特殊なジョブで、主にリソースを展開する目的で使用します。
+
+```yaml
     environment: production.$(resource_name)
+```
+
+Deployment は必ず Environment の指定が必要です。ここでは production という名前の Environment の中の AKS リソース (Variable group aks-variable-group で定義された変数 `resource_name` の値) AKS に対するサービス接続を明示的に指定することなく、タスク内で AKS への展開を行うことができるようになります。
+
+```yaml
     strategy:
       runOnce:
         deploy:
           steps:
+```
+
+`runOnce` は最も単純な展開戦略で、一括で展開処理を行います。他には 10%, 20%, 100% のように徐々に更新する Pod の数を増やしていく AKS 向けの展開戦略 `canary` や、一度に N% ずつ更新する VM 向けの展開戦略 `rolling` があります。
+
+```yaml
           - task: KubernetesManifest@0
             inputs:
               action: 'createSecret'
@@ -185,9 +229,16 @@ Pipeline artifacts は Azure Artifacts とは別もので、パイプライン�
               secretType: 'dockerRegistry'
               secretName: 'regcred'
               dockerRegistryEndpoint: $(acr_connection_name)
+```
+
+この Kubernetes manifest タスクでは `secretName` で指定した名前のシークレットを AKS の `namespace` で指定した名前空間内に作成します。ここでは `secretType` に `dockerRegistry` を指定しており、Azure Container Registry に接続するためのシークレットが作成されます。
+
+```yaml
           - task: KubernetesManifest@0
             inputs:
               action: 'deploy'
               namespace: $(resource_name)
               manifests: '$(Pipeline.Workspace)/manifests/*.yaml'
 ```
+
+最後に前のジョブで作成したマニフェストを AKS 上に展開します。
