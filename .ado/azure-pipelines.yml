@@ -1,0 +1,51 @@
+trigger:
+  branches:
+    include:
+    - master
+  paths:
+    exclude:
+    - Readme.md
+    - resoruces/*
+    - .ado/*
+
+variables: 
+- group: acr-variable-group
+- group: aks-variable-group
+
+stages:
+- stage: deploy
+  displayName: Deploy to production
+  jobs:
+  - job: bake
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - task: KubernetesManifest@0
+      name: bake
+      inputs:
+        action: 'bake'
+        renderType: 'kustomize'
+        kustomizationPath: 'manifests/overlays/production'
+    - publish: '$(bake.manifestsBundle)'
+      artifact: manifests
+  - deployment: deploy
+    dependsOn: bake
+    pool:
+      vmImage: ubuntu-latest
+    environment: production.$(resource_name)
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: KubernetesManifest@0
+            inputs:
+              action: 'createSecret'
+              namespace: $(resource_name)
+              secretType: 'dockerRegistry'
+              secretName: 'regcred'
+              dockerRegistryEndpoint: $(acr_connection_name)
+          - task: KubernetesManifest@0
+            inputs:
+              action: 'deploy'
+              namespace: $(resource_name)
+              manifests: '$(Pipeline.Workspace)/manifests/*.yaml'

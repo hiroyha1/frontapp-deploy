@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontapp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontapp
+  template:
+    metadata:
+      labels:
+        app: frontapp
+    spec:
+      containers:
+      - image: acr2210220.azurecr.io/frontapp:102
+        name: frontapp
+        ports:
+        - containerPort: 8080
+      imagePullSecrets:
+      - name: regcred
